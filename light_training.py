@@ -6,6 +6,7 @@ from config import get_cfg
 from torch.utils.data import DataLoader, TensorDataset
 # from model import Complex_transformer
 from complex_light import Complex_transformer
+from real_light import Light_ChannelFromer
 import os
 from tqdm import tqdm
 import numpy as np
@@ -30,10 +31,11 @@ class huberloss(nn.Module):
 
 def test():
     if cfg.doppler:
-        X_test_mat = io.loadmat('data/new/doppler/test_data.mat')
+        X_test_mat = io.loadmat('data/new/doppler/test_30X.mat')
         X_test = torch.tensor(X_test_mat['test_data'], dtype=torch.complex64).transpose(-1,-2) #(11, 5000, 36, 2)
-        Y_test_mat = io.loadmat('data/new/doppler/test_y.mat')
+        Y_test_mat = io.loadmat('data/new/doppler/test_30Y.mat')
         Y_test = torch.tensor(Y_test_mat['test_y'], dtype=torch.complex64).transpose(-1,-2) 
+        print('SNR = 30db')
     else:
         #dataloader
         X_test_mat = io.loadmat('data/new/new_Test_X.mat')
@@ -43,7 +45,12 @@ def test():
         Y_test = torch.tensor(Y_test_mat['Training_Y'], dtype=torch.complex64).permute(2, 1, 0).contiguous()
 
     #model 
-    model = Complex_transformer(input_dim =X_test.shape[-1], out_dim=Y_test.shape[-2], fc_dim=Y_test.shape[-1], num_heads=2).cuda()
+    print('complex?',cfg.complex)
+    if cfg.complex:
+        model = Complex_transformer(input_dim =X_test.shape[-1], out_dim=Y_test.shape[-2], fc_dim=Y_test.shape[-1], num_heads=2).cuda()
+    else:
+        model = Light_ChannelFromer(input_dim =X_test.shape[-1], out_dim=Y_test.shape[-1], num_heads=2).cuda()
+    # model = Complex_transformer(input_dim =X_test.shape[-1], out_dim=Y_test.shape[-2], fc_dim=Y_test.shape[-1], num_heads=2).cuda()
     #input = 256, 2, 36
     #output: 256, 14, 72
     criterion = mseloss()
@@ -82,7 +89,7 @@ def test():
 
 if __name__ == '__main__':
 
-    # test()
+    test()
     #dataloader
     X_train_mat = io.loadmat('data/new/new_Training_X.mat')
     # print(X_train_mat['Training_X'].shape)
@@ -99,7 +106,13 @@ if __name__ == '__main__':
     # X_val = torch.view_as_complex(X_val).unsqueeze(dim=1) #N, 1, 1, 72
     Y_val_mat = io.loadmat('data/new/new_Validation_Y.mat')
     Y_val = torch.tensor(Y_val_mat['Validation_Y'], dtype=torch.complex64).permute(2, 1, 0).contiguous()
-  
+    
+    X_test_mat = io.loadmat('data/new/new_Test_X.mat')
+    # print(X_train_mat['Training_X'].shape)
+    X_test = torch.tensor(X_test_mat['Training_X'], dtype=torch.complex64).permute(2, 1, 0).contiguous()
+    Y_test_mat = io.loadmat('data/new/new_Test_Y.mat')
+    Y_test = torch.tensor(Y_test_mat['Training_Y'], dtype=torch.complex64).permute(2, 1, 0).contiguous()
+
 
 
     TrainDataset = TensorDataset(X_train, Y_train)
@@ -107,13 +120,15 @@ if __name__ == '__main__':
     # ValDataset = TensorDataset(X_val, Y_val)
     # val_dl = DataLoader(ValDataset, batch_size=cfg.batch_size, shuffle=True)
     #model
-    model = Complex_transformer(input_dim =X_train.shape[-1], out_dim=Y_train.shape[-2], fc_dim=Y_train.shape[-1], num_heads=2).cuda()    
+    model = Complex_transformer(input_dim =X_train.shape[-1], out_dim=Y_train.shape[-2], fc_dim=Y_train.shape[-1], num_heads=2).cuda() 
+    # model = Light_ChannelFromer(input_dim =X_train.shape[-1], out_dim=Y_train.shape[-1], num_heads=2).cuda()    
+
     #input = 256, 2, 36
     #output: 256, 14, 72
     criterion = huberloss()
     loss_test = mseloss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-7)
-    lr_schedule = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[8, 12], gamma=0.1)
+    optimizer = optim.Adam(model.parameters(), lr=2e-3, weight_decay=1e-7)
+    lr_schedule = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5, 10, 15, 20, 30, 40, 50, 60,70, 80, 90], gamma=0.5)
 
     if cfg.test_flag:
         checkpoint = torch.load(cfg.path_checkpoint, map_location=torch.device(device))  # 加载断点
@@ -157,7 +172,7 @@ if __name__ == '__main__':
             vloss = loss_test(pred, Y_val).item()
 
         valid_loss.append(vloss)  
-        print('Val set: Loss: {:.4f}'.format(vloss ))
+        print('Val set: Loss: {:.4f}'.format(vloss))
         print('learning rate:',optimizer.state_dict()['param_groups'][0]['lr'])
         print('\n')
 
@@ -169,8 +184,23 @@ if __name__ == '__main__':
             'epoch': epoch,
             'lr_schedule': lr_schedule.state_dict()
         }
-        # if not os.path.isdir(cfg.filename):
-        #     os.mkdir(cfg.filename)
-        # torch.save(checkpoint, cfg.filename+'/ckpt_best_%s.pth' % (str(epoch)))
-    np.save('complex_train_loss.npy',train_loss) 
-    np.save('complex_valid_loss.npy',valid_loss) 
+        
+     
+        if epoch%10==9:
+            # if not os.path.isdir(cfg.filename):
+            #     os.mkdir(cfg.filename)
+            # torch.save(checkpoint, cfg.filename+'/ckpt_best_%s.pth' % (str(epoch)))
+            SNR = [0, 5, 10, 15, 20, 25, 30]
+            for i in range(len(SNR)):
+            
+                X_t = X_test[5000*i:5000*(i+1),:,:].to(device)
+                Y_t = Y_test[5000*i:5000*(i+1),:,:].to(device)
+
+                model.eval()
+                with torch.no_grad():
+                    tpred  = model(X_t)
+                    tloss = loss_test(tpred, Y_t).item()
+                
+                print('SNR: {} MSE: {:.4f}'.format(SNR[i], tloss))
+    np.save('ComplexLight_train_loss.npy',train_loss) 
+    np.save('ComplexLight_valid_loss.npy',valid_loss)

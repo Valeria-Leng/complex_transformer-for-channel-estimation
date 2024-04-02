@@ -95,8 +95,8 @@ if __name__ == '__main__':
     test_criterion = mseloss()
     # optimizer = optim.Adam(model.parameters(), lr=2e-3, weight_decay=1e-7)
     # lr_schedule = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 40, 60, 80], gamma=0.5)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-7)
-    lr_schedule = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[8, 12], gamma=0.5)
+    optimizer = optim.Adam(model.parameters(), lr=2e-3, weight_decay=1e-7)
+    lr_schedule = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5, 10, 15, 20, 30, 40, 50, 60,70, 80, 90], gamma=0.5)
 
     if cfg.test_flag:
         checkpoint = torch.load(cfg.path_checkpoint, map_location=torch.device(device))  # 加载断点
@@ -152,12 +152,12 @@ if __name__ == '__main__':
 
         lr_schedule.step()
 
-        # checkpoint = {
-        #     'net': model.state_dict(),
-        #     'optimizer': optimizer.state_dict(),
-        #     'epoch': epoch,
-        #     'lr_schedule': lr_schedule.state_dict()
-        # }
+        checkpoint = {
+            'net': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'epoch': epoch,
+            'lr_schedule': lr_schedule.state_dict()
+        }
         # if not os.path.isdir(cfg.filename):
         #     os.mkdir(cfg.filename)
         # torch.save(checkpoint, cfg.filename+'/ckpt_best_%s.pth' % (str(epoch)))

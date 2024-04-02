@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from model import Complex_transformer
 from real import ChannelFromer
 import os
-from tqdm import tqdm
+from matplotlib.ticker import FormatStrFormatter
 from model_training import huberloss
 import matplotlib.pyplot as plt
 cfg = get_cfg()
@@ -26,17 +26,18 @@ class mseloss(nn.Module):
 
 def doppler_test():
       
-    X_test_mat = io.loadmat('data/Doppler_X.mat')
+    X_test_mat = io.loadmat('data/Doppler/Doppler_30X.mat')
     X_test = torch.tensor(X_test_mat['test_data'], dtype=torch.complex64) #torch.Size([11, 5000, 1, 72])
-    Y_test_mat = io.loadmat('data/Doppler_Y.mat')
+    Y_test_mat = io.loadmat('data/Doppler/Doppler_30Y.mat')
     Y_test = torch.tensor(Y_test_mat['test_y'], dtype=torch.complex64).squeeze() #torch.Size([11, 5000, (1,) 1008])
     if cfg.complex:  
         #model 
         #input = 256, 1, 72
         #output: 256, 1008
         model = Complex_transformer(input_dim=cfg.Nf, embed_dim=3*cfg.Nf, out_dim=cfg.Nf*cfg.Ns, fc_dim=cfg.Nf, num_heads=2).cuda()
+        print('CT!')
     else:
-        print('real!\n')
+        print('real_baseline HA02!\n')
         X_test = torch.view_as_real(X_test).transpose(-1, -2)#torch.Size([11, 5000, 1,  2, 72])
         Y_test = torch.view_as_real(Y_test).transpose(-1, -2)
         model = ChannelFromer(input_dim=cfg.Nf, embed_dim=3*cfg.Nf, out_dim=cfg.Nf*cfg.Ns, num_heads=2).cuda()
@@ -67,42 +68,35 @@ def doppler_test():
    
 
 
-def loss_plot(Loss_list):
-    x2 = range(cfg.epoch)
-    y2 = Loss_list
-    plt.plot(x2, y2, '.-')
-    plt.xlabel('Training loss vs. epoches')
-    plt.ylabel('Test loss')
-    plt.show()
-    if cfg.complex:
-        plt.savefig("Complex_Training_loss.jpg")
-    else:
-        plt.savefig("Realbaseline_HA02_Training_loss.jpg")
+def loss_plot():
+    complex_loss_list = np.load('30%CHA02_valid_loss.npy', allow_pickle=True)
+    real_loss_list = np.load('30%HA02_valid_loss.npy', allow_pickle=True)
+    Light_ChannelFromer_loss_list = np.load('30%RealLight_valid_loss.npy', allow_pickle=True)
+    ComplexLight_loss_list = np.load('30%CLight_valid_loss.npy', allow_pickle=True)
 
+    x1 = np.arange(1, 101)
+    # x2 = np.range(50)
+    plt.plot(x1, real_loss_list, 'b', label='HA02')
+    plt.plot(x1, Light_ChannelFromer_loss_list, 'g', label='RealLight')
+    plt.plot(x1, complex_loss_list, 'r', label='ComplexHA02')
+    plt.plot(x1, ComplexLight_loss_list, 'k', label='ComplexLight')
+    plt.xlabel('Validation loss vs. epoches')
+    plt.ylabel('MSE')
+    plt.gca().yaxis.set_major_formatter(FormatStrFormatter('%.3f'))  # 设置小数点后两位
+    plt.gca().yaxis.set_minor_formatter(FormatStrFormatter('%.3f'))
+    plt.gca().yaxis.set_major_locator(plt.MaxNLocator(15))  # 设置主要刻度的数量
+    # plt.gca().yaxis.set_minor_locator(plt.MaxNLocator(10))  # 设置次要刻度的数量
+    plt.legend(loc='upper right')
+    plt.grid(linewidth = 0.5)
+    # 
+    # plt.grid()
+    plt.show()
+    plt.savefig("30%training_real vs cvnn loss.jpg")
 
 if __name__ == '__main__':
     #
-    complex_loss_list = np.load('complex_valid_loss.npy', allow_pickle=True)
-    real_loss_list = np.load('real_valid_loss.npy', allow_pickle=True)
-
-    x1 = range(100)
-    x2 = range(50)
-    plt.plot(x2, complex_loss_list, 'r', x1, real_loss_list, 'b')
-    plt.xlabel('Validation loss vs. epoches')
-    plt.ylabel('MSE')
-    plt.show()
-    plt.savefig("real vs cvnn loss.jpg")
-
-
-
-
-
-
-
-
-
-
-
+    loss_plot()
+# ##################################################################
 
     # doppler_test()
     #dataloader
