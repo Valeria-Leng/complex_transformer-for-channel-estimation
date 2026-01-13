@@ -26,27 +26,30 @@ class mseloss(nn.Module):
 
 def doppler_test():
       
-    X_test_mat = io.loadmat('data/Doppler/Doppler_30X.mat')
+    X_test_mat = io.loadmat('data/Doppler/Doppler_5X.mat')
     X_test = torch.tensor(X_test_mat['test_data'], dtype=torch.complex64) #torch.Size([11, 5000, 1, 72])
-    Y_test_mat = io.loadmat('data/Doppler/Doppler_30Y.mat')
+    Y_test_mat = io.loadmat('data/Doppler/Doppler_5Y.mat')
     Y_test = torch.tensor(Y_test_mat['test_y'], dtype=torch.complex64).squeeze() #torch.Size([11, 5000, (1,) 1008])
     if cfg.complex:  
         #model 
         #input = 256, 1, 72
         #output: 256, 1008
         model = Complex_transformer(input_dim=cfg.Nf, embed_dim=3*cfg.Nf, out_dim=cfg.Nf*cfg.Ns, fc_dim=cfg.Nf, num_heads=2).cuda()
+        checkpoint = torch.load('CT/ckpt_best_99.pth', map_location=torch.device(device))
         print('CT!')
     else:
         print('real_baseline HA02!\n')
+        
         X_test = torch.view_as_real(X_test).transpose(-1, -2)#torch.Size([11, 5000, 1,  2, 72])
         Y_test = torch.view_as_real(Y_test).transpose(-1, -2)
         model = ChannelFromer(input_dim=cfg.Nf, embed_dim=3*cfg.Nf, out_dim=cfg.Nf*cfg.Ns, num_heads=2).cuda()
+        checkpoint = torch.load('real_baseline/ckpt_best_99.pth', map_location=torch.device(device))
         #input = 256, 1, 2, 72
         #output: 256, 2, 1008
     criterion = mseloss()
 
     # if cfg.test_flag:
-    checkpoint = torch.load(cfg.path_checkpoint, map_location=torch.device(device))  # 加载断点
+     # 加载断点
     model.load_state_dict(checkpoint['net'])  # 加载模型可学习参数
     # optimizer.load_state_dict(checkpoint['optimizer'])  # 加载优化器参数
     print('Load ckpt successfully!')
@@ -69,10 +72,17 @@ def doppler_test():
 
 
 def loss_plot():
-    complex_loss_list = np.load('30%CHA02_valid_loss.npy', allow_pickle=True)
-    real_loss_list = np.load('30%HA02_valid_loss.npy', allow_pickle=True)
-    Light_ChannelFromer_loss_list = np.load('30%RealLight_valid_loss.npy', allow_pickle=True)
-    ComplexLight_loss_list = np.load('30%CLight_valid_loss.npy', allow_pickle=True)
+    reallight_double_loss = np.load('Light_ChannelFromer/double/valid_loss.npy', allow_pickle=True)
+    complex_loss_list = np.load('ComplexHA02_valid_loss.npy', allow_pickle=True)
+    real_loss_list = np.load('HA02_valid_loss.npy', allow_pickle=True)
+    Light_ChannelFromer_loss_list = np.load('RealLight_valid_loss.npy', allow_pickle=True)
+    ComplexLight_loss_list = np.load('ComplexLight_valid_loss.npy', allow_pickle=True)
+    io.savemat('./loss_mat/RealLight_double_loss.mat', {'RealLight_double_loss': reallight_double_loss})
+
+    io.savemat('./loss_mat/complexHA02_loss.mat', {'complexHA02_loss': complex_loss_list})
+    io.savemat('./loss_mat/HA02_loss.mat', {'HA02_loss': real_loss_list})
+    io.savemat('./loss_mat/RealLight_loss.mat', {'RealLight_loss': Light_ChannelFromer_loss_list})
+    io.savemat('./loss_mat/complexLight.mat', {'complexLight': ComplexLight_loss_list})
 
     x1 = np.arange(1, 101)
     # x2 = np.range(50)
@@ -98,7 +108,7 @@ if __name__ == '__main__':
     loss_plot()
 # ##################################################################
 
-    # doppler_test()
+    doppler_test()
     #dataloader
     X_test_mat = io.loadmat('data/Test_X.mat')
     # print(X_train_mat['Training_X'].shape)

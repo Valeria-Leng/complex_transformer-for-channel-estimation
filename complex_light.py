@@ -6,6 +6,7 @@ from complexPyTorch.complexLayers import ComplexBatchNorm1d
 from complexPyTorch.complexFunctions import complex_relu
 from torch.nn.functional import softmax, relu, sigmoid
 from torchsummary import summary
+from real_light import attention as Rattention
 
 
 class ComplexConv1d(nn.Module):
@@ -64,12 +65,13 @@ class ComplexConv1d(nn.Module):
     
     
 class Complex_transformer(nn.Module):
-    def __init__(self, input_dim =36, embed_dim = 216, out_dim=14, fc_dim=72, num_heads=2, device='cuda'):
+    def __init__(self, cfg, input_dim =36, embed_dim = 216, out_dim=14, fc_dim=72, num_heads=2, device='cuda'):
         super().__init__()
+        self.cfg = cfg
         self.dlconv = ComplexConv1d(in_channels=2, out_channels=16, kernel_size=3, padding=1)
         self.init_embeding = ComplexLinear(input_dim, fc_dim)
-        self.encoder = Transformer_Encoder(input_dim = fc_dim, embed_dim = embed_dim , num_heads=num_heads, device=device)
-        self.decoder = Transformer_Decoder(input_dim = fc_dim,  out_dim=out_dim, device=device)
+        self.encoder = Transformer_Encoder(self.cfg, input_dim = fc_dim, embed_dim = embed_dim , num_heads=num_heads, device=device)
+        self.decoder = Transformer_Decoder(self.cfg, input_dim = fc_dim,  out_dim=out_dim, device=device)
         # self.outconv = ComplexConv2d(in_channels=2, out_channels=1, kernel_size=3, padding=1)
 
     def forward(self, input):
@@ -84,27 +86,55 @@ class Complex_transformer(nn.Module):
         return y
 
 class Transformer_Encoder(nn.Module):
-    def __init__(self, input_dim =72, embed_dim = 216, num_heads=2, device='cuda'):
+    def __init__(self, cfg, input_dim =72, embed_dim = 216, num_heads=2, device='cuda'):
         super(Transformer_Encoder, self).__init__()
-        self.attention = attention(input_dim=input_dim, embed_dim=embed_dim, num_heads=num_heads, device=device)
+        self.cfg = cfg
+        if self.cfg.no_Cattention:
+            self.attention = Rattention(input_dim=input_dim, embed_dim=embed_dim, num_heads=num_heads, device=device)
+        else:
+            self.attention = attention(input_dim=input_dim, embed_dim=embed_dim, num_heads=num_heads, device=device)
         self.FeedforwardNN = FeeaforwardNN(input_dim=input_dim, fc_dim=input_dim)
-        self.layernorms = nn.ModuleList([Complex_LayerNorm(input_dim) for _ in range(2)])
+        if self.cfg.no_CLN:
+            self.layernorms = nn.ModuleList([nn.LayerNorm(input_dim) for _ in range(2)])
+        else:
+            self.layernorms = nn.ModuleList([Complex_LayerNorm(input_dim) for _ in range(2)])
 
     def forward(self, src):
+        if self.cfg.no_Cattention:
+            src = torch.view_as_real(src).permute(0, 1, 3, 2)    #B, C, RI, 72
         #B, C, 72
         x1 = self.attention(src) + src
-        x1 = self.layernorms[0](x1)
-        x2 = self.FeedforwardNN(x1) + x1
-        x2 = self.layernorms[1](x2)
+        if self.cfg.no_Cattention:
+            x1 = x1.permute(0, 1, 3, 2).contiguous()
+            x1 = torch.view_as_complex(x1) 
+        #B, C, 72
+        if self.cfg.no_CLN:
+            x1 = torch.view_as_real(x1).permute(0, 1, 3, 2)    #B, C, RI, 72
+            x1 = self.layernorms[0](x1)
+            x1 = x1.permute(0, 1, 3, 2).contiguous()
+            x1 = torch.view_as_complex(x1) 
+            x2 = self.FeedforwardNN(x1) + x1
+            x2 = torch.view_as_real(x2).permute(0, 1, 3, 2)    #B, C, RI, 72
+            x2 = self.layernorms[1](x2)
+            x2 = x2.permute(0, 1, 3, 2).contiguous()
+            x2 = torch.view_as_complex(x2) 
+        else:
+            x1 = self.layernorms[0](x1)
+            x2 = self.FeedforwardNN(x1) + x1
+            x2 = self.layernorms[1](x2)
         return x2 #B, C, 72
 
 class Transformer_Decoder(nn.Module):
-    def __init__(self,input_dim=72,  out_dim=14, device='cuda'):
+    def __init__(self, cfg, input_dim=72,  out_dim=14, device='cuda'):
         super(Transformer_Decoder, self).__init__()
+        self.cfg = cfg
         self.conv1 = ComplexConv1d(in_channels=16, out_channels=14, kernel_size=3, padding=1)
         self.conv2 = ComplexConv1d(in_channels=14, out_channels=14, kernel_size=3, padding=1)
         # self.attention = attention(input_dim=input_dim)
-        self.layernorm = Complex_LayerNorm(input_dim)
+        if self.cfg.no_CLN:
+            self.layernorm = nn.LayerNorm(input_dim)
+        else:
+            self.layernorm = Complex_LayerNorm(input_dim)
         self.fc = ComplexLinear(input_dim, input_dim)
 
     def forward(self, src):
@@ -114,7 +144,12 @@ class Transformer_Decoder(nn.Module):
         x2 = complex_relu(x1)
         x3 = self.conv2(x2) + x1
         # x3 = self.attention(x2) + x1
+        if self.cfg.no_CLN:
+            x3 = torch.view_as_real(x3).permute(0, 1, 3, 2)    #B, C, RI, 72
         y = self.layernorm(x3)
+        if self.cfg.no_CLN:
+            y = y.permute(0, 1, 3, 2).contiguous()
+            y = torch.view_as_complex(y) 
         y_fc = self.fc(y) #B, C, 72
         # out = 10*torch.tanh(y_fc.abs()) * torch.exp(-1j*y_fc.angle())
         return y_fc#B, C, 72
@@ -149,7 +184,9 @@ class attention(nn.Module):
         #softmax
         attn_weights = self.scaling * torch.matmul(Q, torch.conj_physical(K).transpose(-1, -2)) #2, B, 16, 16
         attn_weights = self.softmax_real(attn_weights) #2, B, 16, 16 dim=-1
-        attn = torch.matmul(attn_weights, V) ##2, B, C, 36 
+        #############################################
+        attn = torch.matmul(attn_weights, V.abs()) ##2, B, C, 36 
+        attn = attn*torch.exp(-1j*V.angle()) #2, B, C, 36
         heads = attn.permute(1, 2, 3, 0).contiguous().view(B, C, self.num_heads*self.val_dim) #B, C, 72
         heads_all = self.out_proj(heads) #B, C, 72
         return heads_all #B, C, 72
@@ -162,7 +199,9 @@ class attention(nn.Module):
         if attn_mask is not None:
             real += attn_mask.unsqueeze(0).real.to(self.device)
         # abso[abso == float('inf')] = -abso[abso == float('inf')]
-        return softmax(real, dim=-1).type(torch.complex64) ############
+        return softmax(real, dim=-1) ############
+
+
 class Complex_LayerNorm(nn.Module):
 
     def __init__(self, embed_dim=None, eps=1e-05, elementwise_affine=True, device='cuda'):

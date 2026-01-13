@@ -5,17 +5,20 @@ from scipy import io
 from config import get_cfg
 from torch.utils.data import DataLoader, TensorDataset
 # from model import Complex_transformer
-from complex_light import Complex_transformer
+from complex_light import Complex_transformer, count_parameters
 from real_light import Light_ChannelFromer
 import os
 from tqdm import tqdm
 import numpy as np
 from test import mseloss
+import time
+from thop import profile, clever_format
+
 cfg = get_cfg()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 # huber 损失
@@ -31,11 +34,12 @@ class huberloss(nn.Module):
 
 def test():
     if cfg.doppler:
-        X_test_mat = io.loadmat('data/new/doppler/test_30X.mat')
+        # None
+        X_test_mat = io.loadmat('data/new/doppler/test_15X.mat')
         X_test = torch.tensor(X_test_mat['test_data'], dtype=torch.complex64).transpose(-1,-2) #(11, 5000, 36, 2)
-        Y_test_mat = io.loadmat('data/new/doppler/test_30Y.mat')
+        Y_test_mat = io.loadmat('data/new/doppler/test_15Y.mat')
         Y_test = torch.tensor(Y_test_mat['test_y'], dtype=torch.complex64).transpose(-1,-2) 
-        print('SNR = 30db')
+        # print('SNR = 20db')
     else:
         #dataloader
         X_test_mat = io.loadmat('data/new/new_Test_X.mat')
@@ -47,33 +51,54 @@ def test():
     #model 
     print('complex?',cfg.complex)
     if cfg.complex:
-        model = Complex_transformer(input_dim =X_test.shape[-1], out_dim=Y_test.shape[-2], fc_dim=Y_test.shape[-1], num_heads=2).cuda()
+        model = Complex_transformer(cfg, input_dim =X_test.shape[-1], out_dim=Y_test.shape[-2], fc_dim=Y_test.shape[-1], num_heads=4).cuda()
+        checkpoint = torch.load('Ablation_study/complex_light_woCLN&Cattention/ckpt_best_39.pth', map_location=torch.device(device))
     else:
         model = Light_ChannelFromer(input_dim =X_test.shape[-1], out_dim=Y_test.shape[-1], num_heads=2).cuda()
+        checkpoint = torch.load('Light_ChannelFromer/theory/ckpt_best_99.pth', map_location=torch.device(device))
     # model = Complex_transformer(input_dim =X_test.shape[-1], out_dim=Y_test.shape[-2], fc_dim=Y_test.shape[-1], num_heads=2).cuda()
     #input = 256, 2, 36
     #output: 256, 14, 72
     criterion = mseloss()
 
     # if cfg.test_flag:
-    checkpoint = torch.load(cfg.path_checkpoint, map_location=torch.device(device))  # 加载断点
+      # 加载断点
     model.load_state_dict(checkpoint['net'])  # 加载模型可学习参数
     # optimizer.load_state_dict(checkpoint['optimizer'])  # 加载优化器参数
     print('Load ckpt successfully!')
 
     if cfg.doppler:
-        for i in range(X_test.shape[0]):
-            X_t = X_test[i, :,:, :].to(device)
-            Y_t = Y_test[i, :, :, :].to(device)
-            model.eval()
-            with torch.no_grad():
-                tpred  = model(X_t)
-                tloss = criterion(tpred, Y_t).item()
+        print('Doppler test!')
+        SNR = [5, 10, 15, 20, 25]
+        Doppler_MSE = []
+        for i in range(len(SNR)):
+            x_path = 'data/new/doppler/test_' + str(SNR[i]) + 'X.mat'
+            y_path = 'data/new/doppler/test_' + str(SNR[i]) + 'Y.mat'
+            X_test_mat = io.loadmat(x_path)
+            X_test = torch.tensor(X_test_mat['test_data'], dtype=torch.complex64).transpose(-1,-2) #(11, 5000, 36, 2)
+            Y_test_mat = io.loadmat(y_path)
+            Y_test = torch.tensor(Y_test_mat['test_y'], dtype=torch.complex64).transpose(-1,-2) 
+
+        
             
-            print('Doppler: {} Loss: {:.4f}'.format(i, tloss))
+            for i in range(X_test.shape[0]):
+                tloss = 0.0
+                X_t = X_test[i, :,:, :].to(device)
+                Y_t = Y_test[i, :, :, :].to(device)
+                model.eval()
+                with torch.no_grad():
+                    tpred  = model(X_t)
+                    tloss = criterion(tpred, Y_t).item()
+                    # print(criterion(tpred, Y_t).item())
+                    Doppler_MSE.append(tloss)
+        # print(Doppler_MSE)    
+                # print('{:.4f}\t'.format(tloss))
+        Doppler_MSE = np.stack(Doppler_MSE).mean(axis=0)
+        print('Doppler_MSE:', Doppler_MSE)
 
     else:
         SNR = [0, 5, 10, 15, 20, 25, 30]
+        SNR_MSE = []
         for i in range(len(SNR)):
         
             X_t = X_test[5000*i:5000*(i+1),:,:].to(device)
@@ -83,13 +108,17 @@ def test():
             with torch.no_grad():
                 tpred  = model(X_t)
                 tloss = criterion(tpred, Y_t).item()
+                SNR_MSE.append(tloss)
             
             print('SNR: {} MSE: {:.4f}'.format(SNR[i], tloss))
+        SNR_MSE = np.stack(SNR_MSE).mean(axis=0)
+        print('SNR_MSE:', SNR_MSE)
 
 
 if __name__ == '__main__':
-
-    test()
+    # loss = np.load('Light_ChannelFromer/theory/train_loss.npy')
+    # print(loss[-1]*2)
+    # test()
     #dataloader
     X_train_mat = io.loadmat('data/new/new_Training_X.mat')
     # print(X_train_mat['Training_X'].shape)
@@ -120,15 +149,20 @@ if __name__ == '__main__':
     # ValDataset = TensorDataset(X_val, Y_val)
     # val_dl = DataLoader(ValDataset, batch_size=cfg.batch_size, shuffle=True)
     #model
-    model = Complex_transformer(input_dim =X_train.shape[-1], out_dim=Y_train.shape[-2], fc_dim=Y_train.shape[-1], num_heads=2).cuda() 
-    # model = Light_ChannelFromer(input_dim =X_train.shape[-1], out_dim=Y_train.shape[-1], num_heads=2).cuda()    
+    # model = Complex_transformer(cfg, input_dim =X_train.shape[-1], out_dim=Y_train.shape[-2], fc_dim=Y_train.shape[-1], num_heads=2).cuda() 
+    model = Light_ChannelFromer(input_dim =X_train.shape[-1], out_dim=Y_train.shape[-1], num_heads=2).cuda()    
 
+    Trainable_number_of_params, Total_params = count_parameters(model)
+    print("Trainable params: {}\n Total params: {}\n Non-trainable params:{}\n".format(Trainable_number_of_params, Total_params, Total_params-Trainable_number_of_params))
     #input = 256, 2, 36
     #output: 256, 14, 72
     criterion = huberloss()
     loss_test = mseloss()
+    # optimizer = optim.Adam(model.parameters(), lr=2e-3, weight_decay=1e-7)
     optimizer = optim.Adam(model.parameters(), lr=2e-3, weight_decay=1e-7)
-    lr_schedule = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5, 10, 15, 20, 30, 40, 50, 60,70, 80, 90], gamma=0.5)
+    lr_schedule = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5,  15,  25, 30, 40, 50, 60], gamma=0.5)
+    # lr_schedule = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5,last_epoch=80)
+
 
     if cfg.test_flag:
         checkpoint = torch.load(cfg.path_checkpoint, map_location=torch.device(device))  # 加载断点
@@ -146,7 +180,9 @@ if __name__ == '__main__':
         # print('L:{}\t M:{}\t N:{}\t K:{}\t Complex?:{}\t'.format(cfg.L, cfg.M, cfg.N, cfg.K, cfg.complex))
     train_loss = []
     valid_loss = []
+    
     for epoch in range(start_epoch+1, cfg.epoch):
+        start_time = time.perf_counter()
         model.train()
         trainloss = 0
         for index, (x_train, y_train) in enumerate(tqdm(train_dl)):
@@ -154,12 +190,23 @@ if __name__ == '__main__':
             x_train = x_train.to(device)
             y_train = y_train.to(device)
             out = model(x_train)
+            ################################################################
+            flops, params = profile(model, inputs=(x_train,))
+            # 打印结果
+            print(f"FLOPs: {flops / 1e9:.2f} G")  # 转换为GFLOPs
+            print(f"Params: {params / 1e6:.2f} M")  # 转换为百万参数
+            ################################################################
             loss = criterion(out, y_train)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             trainloss += loss.item()
-
+          # 记录结束时间
+        end_time = time.perf_counter()
+        
+        # 计算并存储时间（毫秒）
+        timings = (end_time - start_time) * 1000
+        print(timings)
         train_loss.append(loss.item())
         loss_mean = trainloss / len(train_dl)
         print('Train Epoch: {}\t Loss: {:.6f}'.format(epoch, loss_mean))
@@ -187,10 +234,11 @@ if __name__ == '__main__':
         
      
         if epoch%10==9:
-            # if not os.path.isdir(cfg.filename):
-            #     os.mkdir(cfg.filename)
-            # torch.save(checkpoint, cfg.filename+'/ckpt_best_%s.pth' % (str(epoch)))
+            if not os.path.isdir(cfg.filename):
+                os.mkdir(cfg.filename)
+            
             SNR = [0, 5, 10, 15, 20, 25, 30]
+            SNR_MSE = []
             for i in range(len(SNR)):
             
                 X_t = X_test[5000*i:5000*(i+1),:,:].to(device)
@@ -200,7 +248,17 @@ if __name__ == '__main__':
                 with torch.no_grad():
                     tpred  = model(X_t)
                     tloss = loss_test(tpred, Y_t).item()
+                    SNR_MSE.append(tloss)
                 
                 print('SNR: {} MSE: {:.4f}'.format(SNR[i], tloss))
-    np.save('ComplexLight_train_loss.npy',train_loss) 
-    np.save('ComplexLight_valid_loss.npy',valid_loss)
+            SNR_MSE = np.stack(SNR_MSE).mean(axis=0)
+            print('SNR_MSE:', SNR_MSE)
+            # SNR_best = 0.0129
+            # if SNR_MSE< SNR_best:
+            #     SNR_best = SNR_MSE
+            #     print('Save best model!')
+                # torch.save(checkpoint, cfg.filename+'/ckpt_best.pth')
+                # torch.save(checkpoint, cfg.filename+'/ckpt_best_%s.pth' % (str(epoch)))
+    #         torch.save(checkpoint, cfg.filename+'/ckpt_best_%s.pth' % (str(epoch)))
+    # np.save(cfg.filename+'/train_loss.npy',train_loss) 
+    # np.save(cfg.filename+'/valid_loss.npy',valid_loss)
